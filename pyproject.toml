@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-pyside"
+version = "0.1.0"
+description = "Easy Agent desktop client in Python/PySide6 over easy-rpc"
+requires-python = ">=3.11"
+dependencies = [
+  "PySide6>=6.7",
+  "qasync>=0.27",
+  # easy-rpc-python's HttpxTransport constructs httpx.AsyncClient(http2=True),
+  # so the h2 package is required at runtime (its own metadata omits it).
+  "httpx[http2]>=0.27",
+  "agent-sdk-python @ git+https://github.com/easy-utils/agent-sdk-python.git@v0.17.0",
+]
+
+[project.scripts]
+agent-pyside = "agent_pyside.app:main"
+
+[tool.setuptools.packages.find]
+include = ["agent_pyside*"]
