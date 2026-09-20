@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 import qasync
 
 from . import agent
+from .navigation import CONFIG_SUB_IDS, NavStore, PAGE_VIEWS, SIDER_TABS, SESSION_OVERLAYS
 
 DEFAULT_BASE = "https://agent.agent.10.199.64.20.nip.io"
 
@@ -168,12 +169,113 @@ class ChatPage(QWidget):
         self._on_send(text)
 
 
+class ConfigPage(QWidget):
+    """Config tab root + its drill-in sub-pages (appearance/backends/presets/
+    tools) and the providers list — mirrors the other clients' config surface."""
+
+    def __init__(self, on_open_sub, on_open_providers, on_back):
+        super().__init__()
+        self._on_open_sub = on_open_sub
+        self.list = QListWidget()
+        self.list.itemClicked.connect(self._pick)
+        back = QPushButton("Back")
+        back.clicked.connect(on_back)
+        header = QHBoxLayout()
+        header.addWidget(QLabel("Settings"))
+        header.addStretch(1)
+        header.addWidget(back)
+        lay = QVBoxLayout(self)
+        lay.addLayout(header)
+        lay.addWidget(self.list)
+        self._rows = [
+            ("appearance", "Appearance"),
+            ("backends", "Users / backends"),
+            ("presets", "Presets"),
+            ("tools", "Tools"),
+            ("providers_list", "Providers"),
+        ]
+        for key, label in self._rows:
+            it = QListWidgetItem(label)
+            it.setData(Qt.ItemDataRole.UserRole, key)
+            self.list.addItem(it)
+
+    def _pick(self, item: QListWidgetItem):
+        key = item.data(Qt.ItemDataRole.UserRole)
+        if key == "providers_list":
+            self._on_open_providers()
+        else:
+            self._on_open_sub(key)
+
+
+class ProvidersPage(QWidget):
+    def __init__(self, on_back):
+        super().__init__()
+        self.list = QListWidget()
+        back = QPushButton("Back")
+        back.clicked.connect(on_back)
+        header = QHBoxLayout()
+        header.addWidget(QLabel("Providers"))
+        header.addStretch(1)
+        header.addWidget(back)
+        lay = QVBoxLayout(self)
+        lay.addLayout(header)
+        lay.addWidget(self.list)
+
+    def set_providers(self, providers: list[dict]):
+        self.list.clear()
+        for p in providers:
+            self.list.addItem(QListWidgetItem(f"{p['provider_id']} · {p['capability']}"))
+
+
+class PresetFormPage(QWidget):
+    def __init__(self, on_back):
+        super().__init__()
+        back = QPushButton("Back")
+        back.clicked.connect(on_back)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("Create / edit a preset"))
+        lay.addWidget(back)
+
+
+class ProviderFormPage(QWidget):
+    def __init__(self, on_back):
+        super().__init__()
+        back = QPushButton("Back")
+        back.clicked.connect(on_back)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("Register a provider"))
+        lay.addWidget(back)
+
+
+class MailboxPage(QWidget):
+    def __init__(self, on_back):
+        super().__init__()
+        self.list = QListWidget()
+        back = QPushButton("Back")
+        back.clicked.connect(on_back)
+        header = QHBoxLayout()
+        header.addWidget(QLabel("Mailbox"))
+        header.addStretch(1)
+        header.addWidget(back)
+        lay = QVBoxLayout(self)
+        lay.addLayout(header)
+        lay.addWidget(self.list)
+
+    def set_entries(self, entries: list[dict]):
+        self.list.clear()
+        for m in entries:
+            self.list.addItem(QListWidgetItem(f"{m['msg_type']} · {m['status']}"))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Easy Agent")
         self.resize(480, 820)
         self.setStyleSheet("background:#0d1117; color:#e6edf3;")
+
+        self.nav = NavStore()
+        self.nav.subscribe(self._render)
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -183,13 +285,71 @@ class MainWindow(QMainWindow):
             self.open_session, self.new_session, self.refresh_sessions
         )
         self.chat_page = ChatPage(self.send, self.back)
-        for w in (self.connect_page, self.sessions_page, self.chat_page):
+        self.config_page = ConfigPage(
+            self.open_config_sub, self.open_providers, self.back_to_chat
+        )
+        self.providers_page = ProvidersPage(self.back)
+        self.preset_form_page = PresetFormPage(self.back)
+        self.provider_form_page = ProviderFormPage(self.back)
+        self.mailbox_page = MailboxPage(self.back)
+        for w in (
+            self.connect_page,
+            self.sessions_page,
+            self.chat_page,
+            self.config_page,
+            self.providers_page,
+            self.preset_form_page,
+            self.provider_form_page,
+            self.mailbox_page,
+        ):
             self.stack.addWidget(w)
 
         self.base = ""
         self.token = ""
+        self.username = ""
         self.session_id = ""
         self._watch_task: asyncio.Task | None = None
+
+    def _render(self):
+        """Dispatch the top page of the active tab (the page contract)."""
+        page = self.nav.top
+        kind = page["kind"]
+        if kind == "chat_list":
+            self.stack.setCurrentWidget(self.sessions_page)
+        elif kind == "chat_session":
+            self.stack.setCurrentWidget(self.chat_page)
+        elif kind == "chat_overlay":
+            self.stack.setCurrentWidget(self.mailbox_page)
+        elif kind in ("config_root", "config_sub"):
+            self.stack.setCurrentWidget(self.config_page)
+        elif kind == "providers_list":
+            self.stack.setCurrentWidget(self.providers_page)
+        elif kind == "preset_form":
+            self.stack.setCurrentWidget(self.preset_form_page)
+        elif kind == "provider_form":
+            self.stack.setCurrentWidget(self.provider_form_page)
+
+    def open_config_sub(self, sub_id: str):
+        self.nav.push(
+            {"kind": "config_sub", "key": f"config_sub_{sub_id}", "id": sub_id}
+        )
+
+    def open_providers(self):
+        self.nav.push({"kind": "providers_list", "key": "providers_list"})
+        asyncio.ensure_future(self._load_providers())
+
+    async def _load_providers(self):
+        try:
+            providers = await agent.list_providers(self.base, self.token)
+            self.providers_page.set_providers(providers)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def back(self):
+        self.nav.pop()
+
+    def back_to_chat(self):
+        self.nav.switch_tab("chat")
 
     # ---- connection ----
     @qasync.asyncSlot(str, str)
@@ -202,6 +362,7 @@ class MainWindow(QMainWindow):
             self.connect_page.set_status(f"Connect failed: {e}")
             return
         self.connect_page.set_status("")
+        self.username = await agent.resolve_username(base, token)
         self.stack.setCurrentWidget(self.sessions_page)
         await self._refresh()
 

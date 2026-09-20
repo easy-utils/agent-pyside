@@ -43,9 +43,89 @@ async def connect(base: str, token: str) -> None:
     await _client(base, token).health(pb.HealthRequest())
 
 
+async def identity(base: str, token: str) -> dict:
+    """The caller's resolved identity (tenant id/name + role), from the token."""
+    r = await _client(base, token).getIdentity(pb.GetIdentityRequest())
+    return {"tenant": r.tenant, "tenant_name": r.tenant_name, "role": r.role}
+
+
+async def resolve_username(base: str, token: str) -> str:
+    try:
+        i = await identity(base, token)
+        return i["tenant_name"] or i["tenant"]
+    except Exception:
+        return ""
+
+
 async def list_sessions(base: str, token: str) -> list[str]:
     res = await _client(base, token).listSessions(pb.ListSessionsRequest())
     return [s.name for s in res.sessions]
+
+
+async def list_presets(base: str, token: str, locale: str = "") -> list[dict]:
+    res = await _client(base, token).listPresets(pb.ListPresetsRequest(locale=locale))
+    return [
+        {
+            "id": p.id,
+            "system_prompt": p.system_prompt,
+            "tools": list(p.tools),
+            "max_turns": p.max_turns,
+            "is_system": p.is_system,
+        }
+        for p in res.presets
+    ]
+
+
+async def list_providers(base: str, token: str) -> list[dict]:
+    res = await _client(base, token).listProviders(pb.ListProvidersRequest())
+    return [
+        {
+            "provider_id": p.provider_id,
+            "api_type": p.api_type,
+            "base_url": p.base_url,
+            "api_key": p.api_key,
+            "capability": p.capability,
+            "models": [{"id": m.id, "name": m.name} for m in p.models],
+        }
+        for p in res.providers
+    ]
+
+
+async def list_tools(base: str, token: str, locale: str = "") -> list[dict]:
+    res = await _client(base, token).listTools(pb.ListToolsRequest(locale=locale))
+    return [
+        {"name": t.name, "description": t.description, "category": t.category}
+        for t in res.tools
+    ]
+
+
+async def get_config(base: str, token: str, key: str) -> str:
+    r = await _client(base, token).getConfig(pb.GetConfigRequest(key=key))
+    return r.value
+
+
+async def set_config(base: str, token: str, key: str, value: str) -> None:
+    await _client(base, token).setConfig(pb.SetConfigRequest(key=key, value=value))
+
+
+async def mailbox(base: str, token: str, session_id: str) -> list[dict]:
+    r = await _client(base, token).mailbox(pb.MailboxRequest(id=session_id))
+    return [
+        {"id": m.id, "msg_type": m.msg_type, "payload": m.payload, "status": m.status}
+        for m in r.mailbox
+    ]
+
+
+async def settings(base: str, token: str, session_id: str, updates: dict) -> None:
+    """Only model/preset/locale/variant are client-editable (proto v0.18)."""
+    req = pb.UpdateSettingsRequest(id=session_id)
+    if updates.get("model"):
+        req.model = updates["model"]
+    if updates.get("preset"):
+        req.preset = updates["preset"]
+    req.locale = updates.get("locale", "")
+    req.variant = updates.get("variant", "")
+    await _client(base, token).updateSettings(req)
 
 
 async def create_session(base: str, token: str, name: str) -> str:
