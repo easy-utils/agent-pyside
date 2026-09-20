@@ -30,7 +30,7 @@ import qasync
 
 from . import agent
 
-DEFAULT_BASE = "https://agent.temp.10.199.64.20.nip.io"
+DEFAULT_BASE = "https://agent.agent.10.199.64.20.nip.io"
 
 
 class ConnectPage(QWidget):
