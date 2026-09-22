@@ -13,7 +13,7 @@ dependencies = [
   # easy-rpc-python's HttpxTransport constructs httpx.AsyncClient(http2=True),
   # so the h2 package is required at runtime (its own metadata omits it).
   "httpx[http2]>=0.27",
-  "agent-sdk-python @ git+https://github.com/easy-utils/agent-sdk-python.git@v0.17.0",
+  "agent-sdk-python @ git+https://github.com/easy-utils/agent-sdk-python.git@v0.19.0",
 ]
 
 [project.scripts]

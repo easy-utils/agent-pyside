@@ -73,12 +73,16 @@ class ConnectPage(QWidget):
 
 
 class SessionsPage(QWidget):
-    def __init__(self, on_open, on_new, on_refresh):
+    def __init__(self, on_open, on_new, on_refresh, on_fork):
         super().__init__()
         self._on_open = on_open
+        self._on_fork = on_fork
 
         self.list = QListWidget()
         self.list.itemClicked.connect(self._pick)
+        # Right-click a row → fork (without opening).
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._context_menu)
 
         new_btn = QPushButton("New")
         new_btn.clicked.connect(on_new)
@@ -106,6 +110,16 @@ class SessionsPage(QWidget):
 
     def _pick(self, item: QListWidgetItem):
         self._on_open(item.text())
+
+    def _context_menu(self, pos):
+        item = self.list.itemAt(pos)
+        if item is None:
+            return
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        menu.addAction("Fork", lambda: self._on_fork(item.text()))
+        menu.exec(self.list.mapToGlobal(pos))
 
     def set_status(self, text: str):
         self.status.setText(text)
@@ -147,9 +161,9 @@ class ChatPage(QWidget):
         lay.addWidget(self.transcript, 1)
         lay.addLayout(bottom)
 
-    def start(self, session_id: str, lines: list[str]):
+    def start(self, session_id: str, lines: list[dict]):
         self.title.setText(session_id)
-        self.transcript.setPlainText("\n\n".join(lines))
+        self.transcript.setPlainText("\n\n".join(l["text"] for l in lines))
         self._scroll()
 
     def append(self, text: str):
@@ -264,7 +278,22 @@ class MailboxPage(QWidget):
     def set_entries(self, entries: list[dict]):
         self.list.clear()
         for m in entries:
-            self.list.addItem(QListWidgetItem(f"{m['msg_type']} · {m['status']}"))
+            self.list.addItem(QListWidgetItem(f"{_mailbox_label(m['msg_type'], m.get('source', ''))} · {m['status']}"))
+
+
+def _mailbox_label(msg_type: str, source: str) -> str:
+    """(msgType, source) → a human label (mirrors the other clients)."""
+    if msg_type == "interrupt":
+        return "Interrupt"
+    if msg_type != "trigger":
+        return "Event"
+    if source == "user":
+        return "Message"
+    if source.startswith("session:"):
+        return f"From session · {source[len('session:'):]}"
+    if source.startswith("system:"):
+        return f"From system · {source[len('system:'):]}"
+    return "Message"
 
 
 class MainWindow(QMainWindow):
@@ -282,7 +311,7 @@ class MainWindow(QMainWindow):
 
         self.connect_page = ConnectPage(self.do_connect)
         self.sessions_page = SessionsPage(
-            self.open_session, self.new_session, self.refresh_sessions
+            self.open_session, self.new_session, self.refresh_sessions, self.fork_session
         )
         self.chat_page = ChatPage(self.send, self.back)
         self.config_page = ConfigPage(
@@ -320,6 +349,7 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentWidget(self.chat_page)
         elif kind == "chat_overlay":
             self.stack.setCurrentWidget(self.mailbox_page)
+            asyncio.ensure_future(self._load_mailbox())
         elif kind in ("config_root", "config_sub"):
             self.stack.setCurrentWidget(self.config_page)
         elif kind == "providers_list":
@@ -337,6 +367,15 @@ class MainWindow(QMainWindow):
     def open_providers(self):
         self.nav.push({"kind": "providers_list", "key": "providers_list"})
         asyncio.ensure_future(self._load_providers())
+
+    async def _load_mailbox(self):
+        if not self.session_id:
+            return
+        try:
+            page = await agent.mailbox(self.base, self.token, self.session_id, limit=30)
+            self.mailbox_page.set_entries(page["entries"])
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _load_providers(self):
         try:
@@ -379,6 +418,15 @@ class MainWindow(QMainWindow):
             return
         self.sessions_page.set_status("")
         self.sessions_page.set_sessions(names)
+
+    @qasync.asyncSlot(str)
+    async def fork_session(self, session_id: str):
+        branch = f"fork-{agent.now_ms()}"
+        try:
+            await agent.fork(self.base, self.token, session_id, branch)
+            await self._refresh()
+        except Exception as e:  # noqa: BLE001
+            self.sessions_page.set_status(f"Fork failed: {e}")
 
     @qasync.asyncSlot()
     async def new_session(self):

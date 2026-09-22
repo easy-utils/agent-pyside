@@ -108,12 +108,31 @@ async def set_config(base: str, token: str, key: str, value: str) -> None:
     await _client(base, token).setConfig(pb.SetConfigRequest(key=key, value=value))
 
 
-async def mailbox(base: str, token: str, session_id: str) -> list[dict]:
-    r = await _client(base, token).mailbox(pb.MailboxRequest(id=session_id))
-    return [
-        {"id": m.id, "msg_type": m.msg_type, "payload": m.payload, "status": m.status}
-        for m in r.mailbox
-    ]
+async def mailbox(
+    base: str, token: str, session_id: str, before: str = "", limit: int = 0
+) -> dict:
+    """One page of the mailbox (NEWEST-FIRST, paged backward)."""
+    r = await _client(base, token).mailbox(
+        pb.MailboxRequest(id=session_id, before=before, limit=limit)
+    )
+    return {
+        "has_more": r.has_more,
+        "entries": [
+            {
+                "id": m.id,
+                "msg_type": m.msg_type,
+                "payload": m.payload,
+                "status": m.status,
+                "source": m.source,
+            }
+            for m in r.mailbox
+        ],
+    }
+
+
+async def fork(base: str, token: str, session_id: str, branch: str) -> str:
+    r = await _client(base, token).fork(pb.ForkRequest(id=session_id, name=branch))
+    return r.session.name if r.session is not None else ""
 
 
 async def settings(base: str, token: str, session_id: str, updates: dict) -> None:
@@ -139,13 +158,19 @@ async def create_session(base: str, token: str, name: str) -> str:
 
 async def list_messages(
     base: str, token: str, session_id: str, limit: int = 50
-) -> list[str]:
+) -> list[dict]:
     res = await _client(base, token).listMessages(
         pb.ListMessagesRequest(id=session_id, limit=limit)
     )
-    lines: list[str] = []
+    lines: list[dict] = []
     for m in res.messages:
-        who = {"user": "You", "assistant": "Agent"}.get(m.role, m.role)
+        # A `session:{name}` user message is a hand-off from another session.
+        if m.source.startswith("session:"):
+            who = f"[{m.source[len('session:'):]}]"
+        elif m.source.startswith("system:"):
+            who = f"[system:{m.source[len('system:'):]}]"
+        else:
+            who = {"user": "You", "assistant": "Agent"}.get(m.role, m.role)
         for p in m.parts:
             try:
                 d = json.loads(p.data) if p.data else {}
@@ -154,9 +179,9 @@ async def list_messages(
             if p.type in ("text", "reasoning"):
                 text = d.get("text", "")
                 if text.strip():
-                    lines.append(f"{who}: {text}")
+                    lines.append({"text": f"{who}: {text}", "role": m.role, "source": m.source})
             elif p.type == "tool":
-                lines.append(f"[tool: {d.get('name', 'tool')}]")
+                lines.append({"text": f"[tool: {d.get('name', 'tool')}]", "role": m.role, "source": m.source})
     return lines
 
 
