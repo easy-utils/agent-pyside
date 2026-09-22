@@ -171,6 +171,12 @@ class ChatPage(QWidget):
         self.transcript.setPlainText(cur + text)
         self._scroll()
 
+    def clear_errors(self):
+        """Drop any error lines (a new send makes an error transient)."""
+        text = self.transcript.toPlainText()
+        kept = [ln for ln in text.split("\n") if "failed:" not in ln and "error:" not in ln]
+        self.transcript.setPlainText("\n".join(kept))
+
     def _scroll(self):
         bar = self.transcript.verticalScrollBar()
         bar.setValue(bar.maximum())
@@ -279,6 +285,18 @@ class MailboxPage(QWidget):
         self.list.clear()
         for m in entries:
             self.list.addItem(QListWidgetItem(f"{_mailbox_label(m['msg_type'], m.get('source', ''))} · {m['status']}"))
+
+
+def _error_text(params: dict) -> str:
+    """The message body of a streamed `error` event."""
+    e = params.get("error")
+    if isinstance(e, str):
+        return e
+    if isinstance(e, dict) and isinstance(e.get("message"), str):
+        return e["message"]
+    if isinstance(params.get("message"), str):
+        return params["message"]
+    return "Unknown error"
 
 
 def _mailbox_label(msg_type: str, source: str) -> str:
@@ -468,6 +486,8 @@ class MainWindow(QMainWindow):
             elif event == "tool-call":
                 name = params.get("toolName") or params.get("name") or "tool"
                 self.chat_page.append(f"\n[tool: {name}]\n")
+            elif event == "error":
+                self.chat_page.append(f"\n[Model error: {_error_text(params)}]\n")
 
         async def run():
             try:
@@ -491,11 +511,14 @@ class MainWindow(QMainWindow):
         session_id = self.session_id
         if not session_id:
             return
+        # An error is TRANSIENT: a new prompt clears any prior error line.
+        self.chat_page.clear_errors()
         self.chat_page.append(f"\n\nYou: {text}\n\nAgent: ")
         try:
             await agent.prompt(self.base, self.token, session_id, text)
         except Exception as e:  # noqa: BLE001
-            self.chat_page.append(f"\n[error: {e}]")
+            # The title says what failed; the body is the raw error.
+            self.chat_page.append(f"\n[Send failed: {e}]")
 
 
 def main() -> int:
