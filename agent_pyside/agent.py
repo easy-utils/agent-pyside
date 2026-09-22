@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import datetime
 
 import httpx
 from easyrpc import MODE_STD, HttpxTransport
@@ -58,8 +59,20 @@ async def resolve_username(base: str, token: str) -> str:
 
 
 async def list_sessions(base: str, token: str) -> list[str]:
+    """Sessions ordered most-recent-first (lastMessageAt -> updatedAt -> createdAt)."""
     res = await _client(base, token).listSessions(pb.ListSessionsRequest())
-    return [s.name for s in res.sessions]
+    rows = sorted(res.sessions, key=_recency, reverse=True)
+    return [s.name for s in rows]
+
+
+def _recency(s) -> float:
+    for v in (s.last_message_at, s.updated_at, s.created_at):
+        if v:
+            try:
+                return datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                continue
+    return 0.0
 
 
 async def list_presets(base: str, token: str, locale: str = "") -> list[dict]:
